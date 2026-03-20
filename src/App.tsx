@@ -5,41 +5,79 @@
 
 import { useState, useEffect } from 'react';
 import { School, User, ShieldCheck } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 import AdminPortal from './components/AdminPortal';
 import EmployeePortal from './components/EmployeePortal';
 
+// Inicializar cliente de Supabase
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
 export default function App() {
   const [view, setView] = useState<'landing' | 'employee' | 'admin'>('landing');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user was already logged in as employee
-    const savedFolio = localStorage.getItem('employeeFolio');
-    if (savedFolio) {
-      setView('employee');
-    }
-    
-    // Check if user was already logged in as admin
-    const adminAuth = localStorage.getItem('adminAuth');
-    if (adminAuth === 'true') {
-      setView('admin');
-    }
+    const checkUser = async () => {
+      // 1. Check if user is a logged-in employee (Local Storage)
+      const savedFolio = localStorage.getItem('employeeFolio');
+      if (savedFolio) {
+        setView('employee');
+      }
+      
+      // 2. Check if user is a logged-in admin (Supabase Session)
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setView('admin');
+      }
+      setLoading(false);
+    };
+
+    checkUser();
   }, []);
 
-  const handleAdminLogin = () => {
-    const pin = prompt('Ingrese el PIN de administrador:');
-    if (pin === '1234') {
-      localStorage.setItem('adminAuth', 'true');
-      setView('admin');
-    } else if (pin !== null) {
-      alert('PIN incorrecto');
+  const handleAdminLogin = async () => {
+    const email = prompt('jime@dominio.com');
+    if (!email) return;
+    
+    const password = prompt('licenciadO1.@');
+    if (!password) return;
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        alert('Acceso denegado: ' + error.message);
+      } else if (data.session) {
+        setView('admin');
+      }
+    } catch (err) {
+      alert('Error inesperado al intentar iniciar sesión');
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('adminAuth');
+  const handleLogout = async () => {
+    // Cerrar sesión en Supabase (Admin)
+    await supabase.auth.signOut();
+    
+    // Limpiar localStorage (Empleado)
     localStorage.removeItem('employeeFolio');
+    
     setView('landing');
   };
+
+  // Pantalla de carga mientras verificamos la sesión
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
 
   if (view === 'employee') {
     return <EmployeePortal onLogout={handleLogout} />;
