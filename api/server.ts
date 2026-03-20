@@ -1,84 +1,31 @@
 import express from 'express';
+import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
 import 'dotenv/config';
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
-// Inicializar Supabase
-const supabaseUrl = process.env.SUPABASE_URL || 'https://rnqdsxsqqyiqrpulacyt.supabase.co';
+// Inicializar Supabase con variables de entorno de Vercel
+const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Middleware para verificar conexión
 const requireDB = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (!supabaseUrl || !supabaseKey) {
-    return res.status(503).json({ error: 'Supabase no configurado en variables de entorno.' });
+    return res.status(503).json({ error: 'Supabase no configurado en Vercel.' });
   }
   next();
 };
 
-// --- Funciones de Ayuda (Lógica de Negocio) ---
-
-async function calculateAttendance(folio: string): Promise<number> {
-  const { data: employee } = await supabase.from('employees').select('hire_date').eq('folio', folio).single();
-  if (!employee) return 0;
-
-  const hireDate = new Date(employee.hire_date);
-  const today = new Date();
-  let workingDays = 0;
-
-  for (let d = new Date(hireDate); d <= today; d.setDate(d.getDate() + 1)) {
-    const day = d.getDay();
-    if (day >= 1 && day <= 5) workingDays++;
-  }
-
-  const { count } = await supabase
-    .from('logs')
-    .select('*', { count: 'exact', head: true })
-    .eq('folio', folio);
-
-  return workingDays > 0 ? Math.round(((count || 0) / workingDays) * 100) : 0;
-}
-
-async function calculateSalary(folio: string): Promise<number> {
-  const { data: logs } = await supabase
-    .from('logs')
-    .select('timestamp, type')
-    .eq('folio', folio)
-    .order('timestamp', { ascending: true });
-
-  if (!logs) return 0;
-
-  let totalHours = 0;
-  let lastEntry: Date | null = null;
-
-  for (const log of logs) {
-    const logTime = new Date(log.timestamp);
-    if (log.type === 'entry') {
-      lastEntry = logTime;
-    } else if (log.type === 'exit' && lastEntry) {
-      totalHours += (logTime.getTime() - lastEntry.getTime()) / (1000 * 60 * 60);
-      lastEntry = null;
-    }
-  }
-  return Math.round(totalHours * 40 * 100) / 100;
-}
-
-// --- Rutas de la API ---
+// --- RUTAS DE EMPLEADOS ---
 
 app.get('/api/employees', requireDB, async (req, res) => {
   const { data: employees, error } = await supabase.from('employees').select('*').order('name');
   if (error) return res.status(500).json({ error: error.message });
-
-  const withCalculations = await Promise.all(
-    employees.map(async (emp) => ({
-      ...emp,
-      attendance: await calculateAttendance(emp.folio),
-      salary: await calculateSalary(emp.folio)
-    }))
-  );
-  res.json(withCalculations);
+  res.json(employees);
 });
 
 app.post('/api/employees', requireDB, async (req, res) => {
@@ -87,27 +34,64 @@ app.post('/api/employees', requireDB, async (req, res) => {
   res.json({ success: true });
 });
 
+app.delete('/api/employees/:folio', requireDB, async (req, res) => {
+  const { folio } = req.params;
+  const { error } = await supabase.from('employees').delete().eq('folio', folio);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// --- RUTA DE ESCANEO (QR) ---
+
 app.post('/api/scan', requireDB, async (req, res) => {
   const { folio } = req.body;
-  const { data: employee } = await supabase.from('employees').select('*').eq('folio', folio).single();
   
-  if (!employee) return res.status(404).json({ error: 'No encontrado' });
+  // 1. Buscar empleado
+  const { data: employee, error: empError } = await supabase
+    .from('employees').select('*').eq('folio', folio).single();
+  
+  if (empError || !employee) return res.status(404).json({ error: 'No encontrado' });
 
-  // Lógica de entrada/salida simplificada
+  // 2. Determinar tipo (Entrada/Salida)
   const { data: lastLog } = await supabase
+    .from('logs').select('type').eq('folio', folio)
+    .order('timestamp', { ascending: false }).limit(1).single();
+
+  const nextType = !lastLog || lastLog.type.toLowerCase() === 'salida' ? 'ENTRADA' : 'SALIDA';
+
+  // 3. Guardar log
+  const { error: logError } = await supabase.from('logs').insert([{ folio, type: nextType }]);
+  if (logError) return res.status(500).json({ error: logError.message });
+
+  res.json({ 
+    employee: employee, 
+    type: nextType, 
+    timestamp: new Date().toISOString() 
+  });
+});
+
+// --- RUTA DE LOGS (HISTORIAL) ---
+
+app.get('/api/logs', requireDB, async (req, res) => {
+  const { data: logs, error } = await supabase
     .from('logs')
-    .select('type')
-    .eq('folio', folio)
+    .select('id, folio, type, timestamp, employees(name, position)')
     .order('timestamp', { ascending: false })
-    .limit(1)
-    .single();
+    .limit(50);
 
-  const nextType = !lastLog || lastLog.type === 'exit' ? 'entry' : 'exit';
-
-  const { error } = await supabase.from('logs').insert([{ folio, type: nextType }]);
   if (error) return res.status(500).json({ error: error.message });
 
-  res.json({ success: true, type: nextType, employee: employee.name });
+  // Formatear para el Frontend
+  const formatted = logs.map((log: any) => ({
+    id: log.id,
+    folio: log.folio,
+    type: log.type,
+    timestamp: log.timestamp,
+    name: log.employees?.name || 'Desconocido',
+    position: log.employees?.position || 'N/A'
+  }));
+
+  res.json(formatted);
 });
 
 export default app;
