@@ -22,37 +22,49 @@ const requireDB = (req: express.Request, res: express.Response, next: express.Ne
 
 // --- RUTAS DE EMPLEADOS ---
 
+// 1. Obtener todos los empleados
 app.get('/api/employees', requireDB, async (req, res) => {
   const { data: employees, error } = await supabase.from('employees').select('*').order('name');
   if (error) return res.status(500).json({ error: error.message });
   res.json(employees);
 });
 
-// RUTA CORREGIDA: Permite registros básicos (Folio, Nombre, Puesto)
+// 2. Obtener un empleado específico por FOLIO (Corrige el error 404)
+app.get('/api/employees/:folio', requireDB, async (req, res) => {
+  const { folio } = req.params;
+  const { data, error } = await supabase
+    .from('employees')
+    .select('*')
+    .eq('folio', folio)
+    .single();
+
+  if (error || !data) return res.status(404).json({ error: 'Empleado no encontrado' });
+  res.json(data);
+});
+
+// 3. Registrar nuevo empleado (Corrige el error 400 de campos vacíos)
 app.post('/api/employees', requireDB, async (req, res) => {
   const { folio, name, position, salary, hire_date, attendance } = req.body;
 
-  // Creamos el objeto solo con los datos obligatorios que vienen del trabajador
+  // Creamos el objeto solo con los datos obligatorios
   const dataToInsert: any = {
     folio,
     name,
     position
   };
 
-  // Solo agregamos campos de administrador si tienen un valor real
+  // Solo agregamos campos de administrador si traen información real
   if (salary && salary !== "") dataToInsert.salary = parseFloat(salary);
   if (hire_date && hire_date !== "") dataToInsert.hire_date = hire_date;
   if (attendance && attendance !== "") dataToInsert.attendance = parseFloat(attendance);
 
   const { error } = await supabase.from('employees').insert([dataToInsert]);
   
-  if (error) {
-    return res.status(400).json({ error: error.message });
-  }
-  
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ success: true });
 });
 
+// 4. Eliminar empleado
 app.delete('/api/employees/:folio', requireDB, async (req, res) => {
   const { folio } = req.params;
   const { error } = await supabase.from('employees').delete().eq('folio', folio);
