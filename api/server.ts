@@ -28,9 +28,28 @@ app.get('/api/employees', requireDB, async (req, res) => {
   res.json(employees);
 });
 
+// RUTA CORREGIDA: Permite registros básicos (Folio, Nombre, Puesto)
 app.post('/api/employees', requireDB, async (req, res) => {
-  const { error } = await supabase.from('employees').insert([req.body]);
-  if (error) return res.status(400).json({ error: error.message });
+  const { folio, name, position, salary, hire_date, attendance } = req.body;
+
+  // Creamos el objeto solo con los datos obligatorios que vienen del trabajador
+  const dataToInsert: any = {
+    folio,
+    name,
+    position
+  };
+
+  // Solo agregamos campos de administrador si tienen un valor real
+  if (salary && salary !== "") dataToInsert.salary = parseFloat(salary);
+  if (hire_date && hire_date !== "") dataToInsert.hire_date = hire_date;
+  if (attendance && attendance !== "") dataToInsert.attendance = parseFloat(attendance);
+
+  const { error } = await supabase.from('employees').insert([dataToInsert]);
+  
+  if (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  
   res.json({ success: true });
 });
 
@@ -46,20 +65,17 @@ app.delete('/api/employees/:folio', requireDB, async (req, res) => {
 app.post('/api/scan', requireDB, async (req, res) => {
   const { folio } = req.body;
   
-  // 1. Buscar empleado
   const { data: employee, error: empError } = await supabase
     .from('employees').select('*').eq('folio', folio).single();
   
   if (empError || !employee) return res.status(404).json({ error: 'No encontrado' });
 
-  // 2. Determinar tipo (Entrada/Salida)
   const { data: lastLog } = await supabase
     .from('logs').select('type').eq('folio', folio)
     .order('timestamp', { ascending: false }).limit(1).single();
 
-  const nextType = !lastLog || lastLog.type.toLowerCase() === 'salida' ? 'ENTRADA' : 'SALIDA';
+  const nextType = !lastLog || lastLog.type.toUpperCase() === 'SALIDA' ? 'ENTRADA' : 'SALIDA';
 
-  // 3. Guardar log
   const { error: logError } = await supabase.from('logs').insert([{ folio, type: nextType }]);
   if (logError) return res.status(500).json({ error: logError.message });
 
@@ -81,7 +97,6 @@ app.get('/api/logs', requireDB, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Formatear para el Frontend
   const formatted = logs.map((log: any) => ({
     id: log.id,
     folio: log.folio,
