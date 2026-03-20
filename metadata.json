@@ -1,0 +1,7 @@
+{
+  "name": "Registro de Asistencia QR",
+  "description": "Sistema de registro de entrada y salida de trabajadores mediante escaneo de códigos QR.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
